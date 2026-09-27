@@ -87,8 +87,171 @@ docs/
   koin.md                    how dependency injection works here, with a cheat sheet
 ```
 
-See [CLAUDE.md](CLAUDE.md) for the architecture and the rules that hold it together, and
-[docs/kotlin-compose-recap.md](docs/kotlin-compose-recap.md) if Kotlin or Compose is new to you.
+## How it works
+
+A tour of each piece in plain terms. For more depth, see [CLAUDE.md](CLAUDE.md) (the rules),
+[docs/koin.md](docs/koin.md) (dependency injection) and
+[docs/kotlin-compose-recap.md](docs/kotlin-compose-recap.md) (if Kotlin or Compose is new to you).
+
+### The big picture: modules and their rules
+
+The app is split into Gradle modules, and most capabilities come as a pair:
+
+- **`-api`** says *what* a capability can do: interfaces only. `posts-api` has `PostsApi` and `PostsLauncher`.
+- **`-impl`** says *how*: screens, view models, data, wiring. Almost everything in it is `internal`,
+  so no other module can see it.
+
+Dependencies only point downward: `app` → `features` → `core`. Features talk to each other only through an
+`-api`. **Only `app` may depend on an `-impl`**. That makes `app` the *composition root*, the one place that
+knows which implementations exist.
+
+The build enforces this: a convention plugin fails the build if any other module depends on an `-impl`.
+The rules the compiler can't see, such as "is every feature actually registered?", are checked by
+`./gradlew doctor`.
+
+### Dependency injection (Koin)
+
+Classes never create what they need; they receive it through their constructor. **Koin** is the container
+that builds every object once and passes it wherever it's needed.
+
+Each `-impl` has one Koin module that says how to build its objects. It uses annotated functions, so the
+classes themselves stay free of Koin:
+
+```kotlin
+@Module
+class PostsKoinModule {
+    @Single
+    fun postsApi(): PostsApi = PostsApiImpl()
+
+    @Single
+    internal fun repository(client: NetworkClient): PostsRepository = PostsRepositoryImpl(client)
+}
+```
+
+Read a function as "to provide a `PostsRepository`, I need a `NetworkClient`." The app lists every
+module once, in `app/.../bootstrap/DependencyInjectionConfiguration.kt`, and starts Koin in `Application.onCreate()`.
+
+**Koin's compiler plugin checks the whole graph while the app compiles.** If something asks for a type no
+module provides, the *build* fails (`Missing dependency: NetworkClient`) rather than the app crashing later.
+
+### Navigation (router over Navigation 3)
+
+Navigation 3 keeps the screen history as a plain list of **routes**. The last route in the list is the
+screen you see. `push` adds one, `pop` removes the last one.
+
+- **Routes are private to their feature.** `PostDetailsRoute(postId)` is `internal` to `posts-impl`.
+- **Other features get routes from a launcher.** `PostsApi.launcher.posts()` returns an `AppRoute` without
+  revealing which one. The launcher only says *where*; the caller picks *how* (`push`, `replace`, `goTo`):
+
+  ```kotlin
+  navigator.push(postsApi.launcher.posts())
+  ```
+
+- **Each feature has one `ModuleRouter`** that maps its routes to screens, and registers them so the
+  history can be saved. The app collects every feature's router, and `AppNavHost` shows the current screen.
+- The history **survives rotation and the app being killed in the background**. Each screen gets its own
+  view model, which is cleared when the screen leaves the history.
+
+A screen gets the navigator with `LocalAppNavigator.current`.
+
+### State management (State / Event / Effect)
+
+Every screen follows the same loop, built on the standard Android `ViewModel`:
+
+```
+   user taps ──► Event ──► ViewModel ──► new State ──► screen redraws
+                               └───────► Effect ─────► screen navigates / shows a message
+```
+
+- **State** is everything the screen draws, as one immutable object (`PostsState`). The screen observes it
+  and redraws when it changes.
+- **Event** is something the user did (`PostsEvent.Retry`). The screen sends it with `viewModel.dispatch(…)`.
+- **Effect** is a one-time instruction back to the screen (`PostsEffect.OpenDetails`). **Navigation is always
+  an effect.** The view model never holds a navigator or a `Context`, which is why a plain unit test can drive it.
+
+```kotlin
+internal class CounterViewModel(
+    private val logger: AppLogger,
+) : AppStateViewModel<CounterState, CounterEvent, CounterEffect>(CounterState()) {
+    override fun onEvent(event: CounterEvent) {
+        when (event) {
+            CounterEvent.Increment -> update { it.copy(count = it.count + 1) }
+            CounterEvent.OpenDetails -> emitEffect(CounterEffect.OpenDetails(currentState.count))
+            // …
+        }
+    }
+}
+```
+
+The screen reads state with `collectAsStateWithLifecycle()` and handles effects with `CollectEffects`.
+
+### Networking (Ktor)
+
+Features never see Ktor. They use `NetworkClient` from `network-api`:
+
+```kotlin
+val result: AppResult<List<PostDto>> = client.get("posts")
+```
+
+- **It never throws for a failed request.** Every call returns `AppResult.Success(value)` or
+  `AppResult.Failure(error)`. `error` is one of a fixed set: no connection, timeout, HTTP status, bad body, unknown.
+- `network-impl` builds one Ktor client (OkHttp engine) with the base URL, timeouts and logging from the
+  flavor's config. Relative paths like `"posts"` resolve against that base URL.
+
+Each layer speaks its own language:
+
+1. the **repository** turns a network error into the feature's own failure (`PostsFailure.NoConnection`);
+2. the **view model** keeps that failure in its state;
+3. the **screen** turns it into translated text.
+
+### Design system
+
+`core/designsystem` is a small, custom design system built on Compose Foundation, without Material.
+
+- **Tokens, not raw values.** Colours, spacing, corner radii, text styles and animation durations are
+  read from the theme: `AppTheme.colors.textPrimary`, `AppTheme.spacing.lg`, `AppTheme.motion.medium`.
+  `AppTheme { … }` provides them to everything inside it through `staticCompositionLocalOf`, and switches
+  between light and dark automatically.
+- **Components**: `AppButton`, `AppCard`, `AppText`, `AppTopBar`, `AppScaffold`, `AppProgressIndicator`,
+  `AppMessageView`, `AppAdaptiveLayout`. Anything tappable is built on `AppPressable`, which handles
+  accessibility, the minimum touch size and press feedback.
+- **Accents recolour a whole area**: wrap it in `AppAccentScope(AppAccent.Teal) { … }`.
+- **Icons are ordinary vector drawables** in `res/drawable`, shown with `AppIcon(R.drawable.ic_back, …)`.
+- **It respects the system's "Remove animations" setting**: all durations become zero.
+
+### Logging
+
+Code logs through `AppLogger` (`debug`, `info`, `warning`, `error`). Behind it is **Kermit**, writing to
+Logcat, and the network layer's HTTP logs go through the same logger. Everything is logged in `dev` and in
+any debug build; a `prod` release logs errors only.
+
+### Configuration and flavors
+
+There are two flavors, **dev** and **prod**. Their settings live in `config/dev.properties` and
+`config/prod.properties`. Every key becomes a `BuildConfig` field, which `AppConfig` reads in one place.
+dev installs as `com.example.modularapp.dev`, so it can sit next to prod on the same phone.
+
+### Build setup and quality checks
+
+- **Convention plugins** (`build-logic/`) hold the shared build setup. A feature's build file is a few
+  lines, because `id("modular.feature.impl")` brings Compose, Koin, the design system, the state manager,
+  navigation, lint and the test libraries.
+- **Versions** all live in `gradle/libs.versions.toml`.
+- **detekt** with the Compose rules checks code style and Compose best practices, from one shared config.
+- **`./gradlew doctor`** checks what the compiler can't: every feature is registered in the app, and every
+  route can be saved.
+- **`./gradlew newFeature --name=…`** creates a new feature, already wired in.
+
+### Testing
+
+View models, repositories and the network client are plain classes that receive their dependencies, so
+tests build them directly with fakes:
+
+- **network:** Ktor's `MockEngine`;
+- **repositories:** a fake `NetworkClient`;
+- **view models:** a fake repository.
+
+No emulator or container is needed. Run them with `./gradlew testDebugUnitTest testDevDebugUnitTest`.
 
 ## Toolchain
 
