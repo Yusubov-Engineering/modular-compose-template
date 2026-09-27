@@ -20,6 +20,86 @@ built from native pieces.
 
 Storage and analytics are not included yet.
 
+## Start a project from this template
+
+### 1. Create the repository
+
+On GitHub, click **Use this template → Create a new repository**. Or from a terminal:
+
+```bash
+gh repo create <owner>/my-app --template Yusubov-Engineering/modular-compose-template --private --clone
+cd my-app
+```
+
+The new repository starts with a single fresh commit and no link back to the template.
+
+### 2. Open it in Android Studio
+
+Use **File → Open**, choose the folder and let Gradle sync. Open the folder only after the clone has
+finished: if Studio opens a half-copied folder, it saves a non-Gradle project setup and later reports
+*"Unable to determine project Android Gradle Plugin (AGP) version"*. If that happens, close the project,
+delete everything in `.idea/` except `runConfigurations/`, and open it again.
+
+### 3. Change the package and application id
+
+From the repository root, with your own package in `NEW`:
+
+```bash
+OLD=com.example.modularapp NEW=com.acme.myapp
+OLD_DIR=${OLD//.//} NEW_DIR=${NEW//.//}
+
+# Every text reference: Kotlin packages and imports, namespace, applicationId, build-logic, docs.
+grep -rIl --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle "$OLD" . \
+  | xargs sed -i '' "s/$OLD/$NEW/g"   # on Linux: sed -i "s/…/…/g"
+
+# Move the source folders to match the new package, in every module.
+find . -type d -path "*/kotlin/$OLD_DIR" -not -path "*/build/*" | while read -r d; do
+  dst="${d%$OLD_DIR}$NEW_DIR"; mkdir -p "$(dirname "$dst")"; git mv "$d" "$dst"
+done
+find . -type d -empty -path "*/kotlin/*" -not -path "./.git/*" -delete
+```
+
+This covers the Kotlin packages, the app's `namespace` and `applicationId`, and `BASE_PACKAGE` in
+`build-logic`, which every module's namespace is derived from. Sync Gradle afterwards.
+
+### 4. Rename the app
+
+| What | Where |
+| --- | --- |
+| Name shown on the device | `app/src/main/res/values/strings.xml` → `app_name` |
+| Gradle project name | `settings.gradle.kts` → `rootProject.name` |
+| The `app` run configuration's module | `.idea/runConfigurations/app.xml` → `<rootProject.name>.app.main`. Change it together with `rootProject.name`, or the configuration can't find the module |
+| Log tag | `core/logger/logger-impl/…/LoggerConfig.kt` → `tag` |
+| Class and theme names (optional, cosmetic) | `ModularApplication`, `Theme.ModularApp`, `ModularKoinApplication` |
+
+### 5. Point it at your backend
+
+Set `API_BASE_URL`, and any other settings, in `config/dev.properties` and `config/prod.properties`.
+Every key becomes a `BuildConfig` field, which `app/…/bootstrap/AppConfig.kt` reads.
+
+### 6. Replace the example features
+
+1. Create your first feature: `./gradlew newFeature --name=home`.
+2. Choose where the app opens: in `app/…/bootstrap/RouterConfiguration.kt`, set `initialRoute` from your
+   feature's launcher, e.g. `koin.get<HomeApi>().launcher.home()`.
+3. Delete `features/counter` and `features/posts`. Then remove their lines from `app/build.gradle.kts` and
+   from the `includes` list in `DependencyInjectionConfiguration.kt`.
+
+The build and `./gradlew doctor` point out anything left behind.
+
+### 7. Verify and commit
+
+```bash
+./gradlew :app:assembleDevDebug testDebugUnitTest testDevDebugUnitTest detekt doctor
+git add -A && git commit -m "Set up my-app from modular-compose-template"
+```
+
+### 8. Before the first release
+
+- **Add release signing.** The template has none yet, so a `prodRelease` build is unsigned and Google Play
+  will reject it. Read the keystore details from a gitignored `key.properties`.
+- **Rewrite this README and `CLAUDE.md`** to describe your app rather than the template.
+
 ## Run it
 
 ```bash
