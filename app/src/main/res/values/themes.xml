@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Only the window: everything drawn inside it comes from AppTheme.
+         The background matches AppColors.light().background so the first
+         frame does not flash. -->
+    <style name="Theme.ModularApp" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
+    <color name="window_background">#F7F7FA</color>
+</resources>

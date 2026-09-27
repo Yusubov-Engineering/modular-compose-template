@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="posts_title">Posts</string>
+    <string name="posts_details_title">Post</string>
+    <string name="posts_back">Back</string>
+    <string name="posts_loading">Loading posts</string>
+    <string name="posts_empty_title">Nothing here yet</string>
+    <string name="posts_empty_message">There are no posts to show.</string>
+    <string name="posts_retry">Try again</string>
+    <string name="posts_post_number">Post #%1$d</string>
+
+    <string name="posts_failure_title">Could not load posts</string>
+    <string name="posts_failure_no_connection">You appear to be offline. Check your connection and try again.</string>
+    <string name="posts_failure_not_found">That post no longer exists.</string>
+    <string name="posts_failure_unavailable">The server is not answering right now. Try again in a moment.</string>
+    <string name="posts_failure_malformed">The server sent something this version of the app cannot read.</string>
+</resources>
